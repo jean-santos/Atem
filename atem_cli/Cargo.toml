@@ -1,0 +1,12 @@
+[package]
+name = "atem_cli"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.0.18", features = ["derive"] }
+
+[dependencies.atem_converter]
+path = "../atem_converter"
