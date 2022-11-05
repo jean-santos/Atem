@@ -1,15 +1,50 @@
-#![windows_subsystem = "windows"]
-use atem::ffmpeg::{
-    convert_first, convert_out, get_duration, get_original_audio_rate, get_output, get_target_size,
-    get_target_video_rate, is_minsize,
-};
-use std::env;
+use atem_converter::{is_minsize, CommandTrait, Converter};
+use std::{env, path::Path};
 use tauri::{
-    api::{dialog::message, process::Command},
+    api::{
+        dialog::message,
+        process::{Command, Output},
+    },
     Manager,
 };
 
-pub mod ffmpeg;
+#[derive(Debug)]
+pub struct TauriCommandCrossCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+impl<'b> CommandTrait<'b, Output, tauri::api::Error> for TauriCommandCrossCommand {
+    fn new(path: &str) -> Self {
+        Self {
+            program: path.to_string(),
+            args: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for arg in args {
+            self.args.push(arg.as_ref().to_string());
+        }
+        self
+    }
+
+    fn output(self) -> tauri::api::Result<Output> {
+        Command::new_sidecar(self.program)
+            .expect("failed to find sidecar")
+            .args(self.args)
+            .output()
+    }
+
+    fn get_stdout(value: Output) -> String {
+        value.stdout.to_string()
+    }
+}
 
 #[cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
@@ -47,29 +82,38 @@ fn open_file_explorer(path: &str, window: tauri::Window) {
 
 #[tauri::command(async)]
 fn convert_video(input: &str, target_size: f32) -> String {
-    let output = get_output(input);
+    let ffprobe = Path::new("ffprobe.exe");
+    let ffmpeg = Path::new("ffmpeg.exe");
+    let input = Path::new(input);
 
-    let duration = get_duration(input);
-    let audio_rate = get_original_audio_rate(input);
-    let min_size = get_target_size(audio_rate, duration);
+    let converter: Converter<TauriCommandCrossCommand, Output, tauri::api::Error> =
+        Converter::new(ffmpeg, ffprobe, input);
+
+    let output = converter.get_output();
+
+    let duration = converter.get_duration();
+    let audio_rate = converter.get_original_audio_rate();
+    let min_size = converter.get_target_size(audio_rate, duration);
 
     if !is_minsize(min_size, target_size) {
         println!("{min_size}");
         return "".to_string();
     }
 
-    let target_bitrate = get_target_video_rate(target_size, duration, audio_rate);
-    convert_first(input, target_bitrate);
-    convert_out(input, target_bitrate, audio_rate, &output);
+    let target_bitrate = converter.get_target_video_rate(target_size, duration, audio_rate);
+    converter.convert_first(target_bitrate);
+    converter.convert_out(target_bitrate, audio_rate, &output);
 
-    return output;
+    let outpath = output.to_str().unwrap().to_string();
+
+    return outpath;
 }
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![open_file_explorer, convert_video])
         .setup(|app| {
             match app.get_cli_matches() {
-                Ok(matches) => {
+                Ok(_matches) => {
                     println!("got matches");
                 }
                 Err(_) => {
